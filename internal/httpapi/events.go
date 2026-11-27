@@ -1,4 +1,4 @@
-package main
+package httpapi
 
 import (
 	"database/sql"
@@ -8,9 +8,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/hieuvoq/chain-event-indexer/internal/postgres"
+	"github.com/hieuvoq/chain-event-indexer/internal/sepolia"
 )
 
-func eventsAPI(db *sql.DB) http.Handler {
+func NewHandler(db *sql.DB) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -34,35 +37,20 @@ func eventsAPI(db *sql.DB) http.Handler {
 				return
 			}
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT block_number,log_index,tx_hash,sender,recipient,amount_raw::text
-			FROM sepolia_usdc_transfers WHERE (block_number,log_index)>($1,$2)
-			ORDER BY block_number,log_index LIMIT $3`, block, index, limit+1)
+		events, err := postgres.ListTransfers(r.Context(), db, block, index, limit+1)
 		if err != nil {
 			apiError(w, err)
 			return
 		}
-		defer rows.Close()
 		page := struct {
-			Events []transfer `json:"events"`
-			Next   *string    `json:"next_cursor"`
-		}{Events: make([]transfer, 0, limit)}
-		for rows.Next() {
-			var e transfer
-			if err := rows.Scan(&e.Block, &e.Index, &e.Tx, &e.From, &e.To, &e.Amount); err != nil {
-				apiError(w, err)
-				return
-			}
-			if len(page.Events) == limit {
-				last := page.Events[limit-1]
-				cursor := fmt.Sprintf("%d:%d", last.Block, last.Index)
-				page.Next = &cursor
-				break
-			}
-			page.Events = append(page.Events, e)
-		}
-		if err := rows.Err(); err != nil {
-			apiError(w, err)
-			return
+			Events []sepolia.Transfer `json:"events"`
+			Next   *string            `json:"next_cursor"`
+		}{Events: events}
+		if len(events) > limit {
+			page.Events = events[:limit]
+			last := page.Events[limit-1]
+			cursor := fmt.Sprintf("%d:%d", last.Block, last.Index)
+			page.Next = &cursor
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(page); err != nil {

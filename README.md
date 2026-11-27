@@ -2,6 +2,19 @@
 
 A Go service that indexes USDC transfers on Ethereum Sepolia into PostgreSQL and serves them through a paginated HTTP API. You can stop the process, let the chain advance, then restart it against the same database. The recovery demo checks every stored event ID against a fresh RPC query.
 
+## Project layout
+
+| Path | Responsibility |
+| --- | --- |
+| `cmd/chain-event-indexer/` | Service entry point. The root command also supports `go run .`. |
+| `internal/app/` | CLI flags, environment configuration, worker polling, and HTTP server lifecycle. |
+| `internal/sepolia/` | Ethereum JSON-RPC client and USDC transfer decoding. |
+| `internal/indexer/` | Finalized block ranges, replay, and the transaction boundary for each batch. |
+| `internal/postgres/` | Embedded SQL schema, checkpoint locking, event inserts, and paginated reads. |
+| `internal/httpapi/` | HTTP input validation, cursor handling, and JSON responses for `GET /events`. |
+| `tests/integration/` | Recovery and API tests with PostgreSQL and a local RPC fixture. |
+| `scripts/` | Recovery demo against live Sepolia data. |
+
 ## Run locally
 
 Use Go 1.22 or later and PostgreSQL. To start a local PostgreSQL 16 instance with a persistent volume:
@@ -11,7 +24,7 @@ docker run -d --name chain-indexer-db \
   -p 127.0.0.1:55432:5432 -v chain-indexer-data:/var/lib/postgresql/data \
   -e POSTGRES_PASSWORD=indexer-demo -e POSTGRES_DB=indexer postgres:16-alpine
 export DATABASE_URL='postgres://postgres:indexer-demo@127.0.0.1:55432/indexer?sslmode=disable'
-go build -o chain-event-indexer .
+go build -o chain-event-indexer ./cmd/chain-event-indexer
 ./chain-event-indexer
 ```
 

@@ -30,7 +30,7 @@ if [[ $(sql "SELECT count(*) FROM (VALUES (to_regclass('sepolia_usdc_checkpoint'
 fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-go build -o "$work/indexer" .
+go build -o "$work/indexer" ./cmd/chain-event-indexer
 head=$(head_block)
 start=$((head-63))
 "$work/indexer" -once -start-block "$start"

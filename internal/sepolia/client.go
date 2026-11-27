@@ -1,4 +1,4 @@
-package main
+package sepolia
 
 import (
 	"bytes"
@@ -25,14 +25,34 @@ var (
 	addressTopic = regexp.MustCompile(`^0x0{24}[0-9a-fA-F]{40}$`)
 )
 
-type rpc string
+type Client struct {
+	endpoint string
+}
 
-func (r rpc) call(ctx context.Context, method string, params []any, target any) error {
+func NewClient(endpoint string) *Client {
+	if endpoint == "" {
+		endpoint = defaultRPC
+	}
+	return &Client{endpoint: endpoint}
+}
+
+func (r *Client) CheckChain(ctx context.Context) error {
+	var chain string
+	if err := r.call(ctx, "eth_chainId", []any{}, &chain); err != nil {
+		return err
+	}
+	if chain != "0xaa36a7" {
+		return fmt.Errorf("expected Ethereum Sepolia (0xaa36a7), received %q", chain)
+	}
+	return nil
+}
+
+func (r *Client) call(ctx context.Context, method string, params []any, target any) error {
 	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, string(r), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -73,7 +93,7 @@ func quantity(s string) (int64, error) {
 	return int64(n), err
 }
 
-func (r rpc) finalized(ctx context.Context) (int64, error) {
+func (r *Client) Finalized(ctx context.Context) (int64, error) {
 	var block struct{ Number string }
 	if err := r.call(ctx, "eth_getBlockByNumber", []any{"finalized", false}, &block); err != nil {
 		return 0, err
@@ -81,7 +101,7 @@ func (r rpc) finalized(ctx context.Context) (int64, error) {
 	return quantity(block.Number)
 }
 
-type transfer struct {
+type Transfer struct {
 	Block  int64  `json:"block_number"`
 	Index  int64  `json:"log_index"`
 	Tx     string `json:"transaction_hash"`
@@ -96,21 +116,21 @@ type rpcLog struct {
 	Removed                                               bool
 }
 
-func (l rpcLog) decode(first, last int64) (transfer, error) {
+func (l rpcLog) decode(first, last int64) (Transfer, error) {
 	block, err := quantity(l.BlockNumber)
 	if err != nil || block < first || block > last {
-		return transfer{}, fmt.Errorf("unexpected block %q in range %d..%d", l.BlockNumber, first, last)
+		return Transfer{}, fmt.Errorf("unexpected block %q in range %d..%d", l.BlockNumber, first, last)
 	}
 	index, err := quantity(l.LogIndex)
 	if err != nil {
-		return transfer{}, err
+		return Transfer{}, err
 	}
 	if l.Removed || !strings.EqualFold(l.Address, usdc) || !word.MatchString(l.TransactionHash) || !word.MatchString(l.Data) ||
 		len(l.Topics) != 3 || !strings.EqualFold(l.Topics[0], transferTopic) || !addressTopic.MatchString(l.Topics[1]) || !addressTopic.MatchString(l.Topics[2]) {
-		return transfer{}, fmt.Errorf("invalid finalized USDC Transfer at %d:%d", block, index)
+		return Transfer{}, fmt.Errorf("invalid finalized USDC Transfer at %d:%d", block, index)
 	}
 	amount, _ := new(big.Int).SetString(l.Data[2:], 16)
-	return transfer{
+	return Transfer{
 		Block: block, Index: index, Tx: strings.ToLower(l.TransactionHash),
 		From:   "0x" + strings.ToLower(l.Topics[1][26:]),
 		To:     "0x" + strings.ToLower(l.Topics[2][26:]),
@@ -118,7 +138,7 @@ func (l rpcLog) decode(first, last int64) (transfer, error) {
 	}, nil
 }
 
-func (r rpc) transfers(ctx context.Context, first, last int64) ([]transfer, error) {
+func (r *Client) Transfers(ctx context.Context, first, last int64) ([]Transfer, error) {
 	filter := map[string]any{
 		"fromBlock": fmt.Sprintf("0x%x", first), "toBlock": fmt.Sprintf("0x%x", last),
 		"address": usdc, "topics": []string{transferTopic},
@@ -127,7 +147,7 @@ func (r rpc) transfers(ctx context.Context, first, last int64) ([]transfer, erro
 	if err := r.call(ctx, "eth_getLogs", []any{filter}, &logs); err != nil {
 		return nil, err
 	}
-	events := make([]transfer, 0, len(logs))
+	events := make([]Transfer, 0, len(logs))
 	for _, l := range logs {
 		e, err := l.decode(first, last)
 		if err != nil {
